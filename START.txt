@@ -1,0 +1,121 @@
+╔════════════════════════════════════════════════════════════════════╗
+║                                                                    ║
+║         🎬 TERABOX DIRECT LINK EXTRACTOR API - START HERE 🎬      ║
+║                                                                    ║
+║              Pass Terabox Link → Get Download + Stream             ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════════╝
+
+📦 WHAT'S INSIDE
+===============
+✅ terabox_direct_api.py  - Main API (Python FastAPI)
+✅ requirements.txt       - Python dependencies
+✅ Dockerfile            - For Docker containerization
+✅ docker-compose.yml    - Docker Compose setup
+✅ README.md             - Quick guide
+✅ SETUP.md              - Detailed setup instructions
+
+⚡ QUICK START (CHOOSE ONE)
+==========================
+
+OPTION 1: Python (30 seconds)
+─────────────────────────────
+1. pip install -r requirements.txt
+2. python terabox_direct_api.py
+3. Open: http://localhost:8000/api?url=YOUR_LINK
+
+OPTION 2: Docker (2 minutes)
+────────────────────────────
+1. docker-compose up -d
+2. Open: http://localhost:8000/api?url=YOUR_LINK
+3. Done!
+
+OPTION 3: Docker Manual
+───────────────────────
+1. docker build -t terabox-api .
+2. docker run -p 8000:8000 terabox-api
+3. Open: http://localhost:8000/api?url=YOUR_LINK
+
+🎯 USAGE
+========
+
+API Endpoint:
+  GET /api?url=TERABOX_LINK
+
+Example:
+  http://localhost:8000/api?url=https://1024terabox.com/s/10LHRppa8fMO6NJhuiRMkWA
+
+Response:
+  {
+    "status": "success",
+    "download_link": "https://...",
+    "stream_link": "https://..."
+  }
+
+📚 DOCUMENTATION
+================
+- README.md      - Quick guide
+- SETUP.md       - Detailed setup
+- /docs          - Interactive API docs (http://localhost:8000/docs)
+
+🔗 SUPPORTED SERVICES
+====================
+✅ terabox.com
+✅ 1024terabox.com
+✅ terasharefile.com
+✅ teraboxshare.com
+✅ terabbox.com
+✅ And other terabox variants
+
+💻 REQUIREMENTS
+===============
+Python Method:
+  - Python 3.7+
+  - pip
+
+Docker Method:
+  - Docker
+  - Docker Compose (optional)
+
+🚀 WHAT NEXT?
+=============
+1. Read SETUP.md for detailed instructions
+2. Run the API (Python or Docker)
+3. Test with example link
+4. Integrate into your project
+
+📞 TROUBLESHOOTING
+==================
+- API won't start? → Check Python version (3.7+)
+- Port 8000 in use? → Use different port
+- Module not found? → Run pip install -r requirements.txt
+- Docker won't build? → Add --no-cache flag
+
+✨ FEATURES
+===========
+✅ Fast (2-5 seconds)
+✅ Simple (just pass URL)
+✅ Reliable (follows redirects)
+✅ Cached (1 hour)
+✅ Multi-service support
+✅ No login required
+✅ No data storage
+✅ HTTPS ready
+
+🎉 YOU'RE ALL SET!
+==================
+Extract ZIP → Run API → Use it!
+
+Everything you need is here. Choose Python or Docker and start!
+
+Happy linking! 🔗
+
+═══════════════════════════════════════════════════════════════════
+
+QUICK COMMANDS:
+python terabox_direct_api.py       (Python)
+docker-compose up -d               (Docker)
+http://localhost:8000/docs         (Documentation)
+curl "http://localhost:8000/api?url=YOUR_LINK"  (Test)
+
+═══════════════════════════════════════════════════════════════════

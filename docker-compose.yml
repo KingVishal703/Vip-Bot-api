@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  terabox-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    container_name: terabox-video-api
+    
+    ports:
+      - "8000:8000"
+    
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=8000
+    
+    volumes:
+      # Downloads folder ko persist karo
+      - ./downloads:/app/downloads
+      # Cache folder (optional)
+      - ./cache:/app/cache
+    
+    restart: unless-stopped
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/video/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Optional: Add Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: terabox-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # For SSL certificates (optional)
+      # - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - terabox-api
+    restart: unless-stopped
+    networks:
+      - terabox-network
+
+networks:
+  terabox-network:
+    driver: bridge
+
+volumes:
+  downloads:
+    driver: local
+  cache:
+    driver: local
