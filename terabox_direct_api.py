@@ -1,108 +1,151 @@
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 import requests
 import re
-from typing import Optional, Dict
 import json
+from typing import Optional, Dict
 import logging
-from urllib.parse import quote, unquote, urlencode
+from urllib.parse import quote, unquote
 import time
-from functools import lru_cache
 import hashlib
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Terabox Advanced API",
-    description="Complete Terabox link extractor with file details, download, and streaming",
-    version="2.0"
+    title="Terabox Direct Download API",
+    description="Extract actual downloadable file links from terabox shares",
+    version="3.0"
 )
 
-class TeraboxAdvancedExtractor:
-    """Extract complete file information from terabox services"""
+class TeraboxRealExtractor:
+    """Extract REAL downloadable links from terabox"""
     
     def __init__(self):
         self.cache = {}
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.terabox.com/',
         })
     
-    def parse_url(self, url: str) -> Dict:
-        """Parse terabox URL"""
+    def parse_share_url(self, url: str) -> Dict:
+        """Extract share ID and service from URL"""
         try:
+            # Extract service domain
             service_match = re.search(r'https?://([a-zA-Z0-9.-]+terabox[a-zA-Z0-9.-]*\.com)', url)
+            # Extract share ID
             share_match = re.search(r'/s/([a-zA-Z0-9_-]+)', url)
             
             if not service_match or not share_match:
-                raise ValueError("Invalid terabox URL format")
+                raise ValueError("Invalid terabox URL")
+            
+            service = service_match.group(1)
+            share_id = share_match.group(1)
             
             return {
-                'service': service_match.group(1),
-                'share_id': share_match.group(1),
-                'original_url': url,
+                'service': service,
+                'share_id': share_id,
+                'url': url,
             }
         except Exception as e:
             raise ValueError(f"URL parsing failed: {e}")
     
-    def get_direct_link(self, url: str) -> Optional[str]:
-        """Get direct download link by following redirects"""
+    def get_share_page(self, url: str) -> Optional[str]:
+        """Get terabox share page content"""
         try:
-            cache_key = hashlib.md5(url.encode()).hexdigest()
-            if cache_key in self.cache:
-                cached = self.cache[cache_key]
-                if time.time() - cached['time'] < 3600:
-                    return cached['link']
+            response = self.session.get(url, timeout=15, verify=False)
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            logger.error(f"Error fetching share page: {e}")
+            return None
+    
+    def extract_file_info_from_page(self, html_content: str) -> Optional[Dict]:
+        """Extract file info from HTML page"""
+        try:
+            # Look for file list data in page
+            patterns = [
+                r'"list":\s*(\[.*?\])',
+                r'"filename":"([^"]+)".*?"size":(\d+)',
+                r'var\s+fileinfo\s*=\s*(\{.*?\})',
+                r'"server_filename":"([^"]+)"',
+            ]
             
+            file_info = {}
+            
+            for pattern in patterns:
+                match = re.search(pattern, html_content)
+                if match:
+                    if 'list' in pattern:
+                        try:
+                            list_data = json.loads(match.group(1))
+                            if isinstance(list_data, list) and len(list_data) > 0:
+                                file_info = list_data[0]
+                                break
+                        except:
+                            pass
+            
+            return file_info if file_info else None
+        except Exception as e:
+            logger.error(f"Error extracting file info: {e}")
+            return None
+    
+    def get_dlink_from_api(self, service: str, share_id: str) -> Optional[str]:
+        """Get dlink (actual file link) from terabox API"""
+        try:
+            # Try multiple terabox API endpoints
+            endpoints = [
+                f"https://{service}/api/shorturlv2?app_id=250528&weiyun=1&share_id={share_id}",
+                f"https://{service}/api/shorturlv2?app_id=250528&share_id={share_id}",
+                f"https://{service}/api/download?share_id={share_id}",
+            ]
+            
+            for api_url in endpoints:
+                try:
+                    response = self.session.get(api_url, timeout=10, verify=False)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        logger.info(f"API Response: {data}")
+                        
+                        # Look for download link in response
+                        if 'dlink' in data:
+                            return data['dlink']
+                        elif 'shorturl' in data:
+                            return data['shorturl']
+                        elif 'download_link' in data:
+                            return data['download_link']
+                        elif 'list' in data and len(data['list']) > 0:
+                            file_info = data['list'][0]
+                            if 'dlink' in file_info:
+                                return file_info['dlink']
+                except Exception as e:
+                    logger.warning(f"API endpoint failed: {api_url} - {e}")
+                    continue
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error getting dlink: {e}")
+            return None
+    
+    def follow_redirect(self, url: str) -> Optional[str]:
+        """Follow redirects to get actual download link"""
+        try:
             response = self.session.head(url, allow_redirects=True, timeout=15, verify=False)
             
             if response.status_code == 200:
-                direct_link = response.url
-                
-                self.cache[cache_key] = {
-                    'link': direct_link,
-                    'time': time.time()
-                }
-                
-                return direct_link
+                return response.url
             
-            return None
+            return url
         except Exception as e:
-            logger.error(f"Error getting direct link: {e}")
-            return None
-    
-    def extract_filename(self, url: str) -> str:
-        """Extract filename from URL or headers"""
-        try:
-            response = self.session.head(url, allow_redirects=True, timeout=10, verify=False)
-            
-            if 'content-disposition' in response.headers:
-                match = re.search(r'filename[^;=\n]*=(["\']?)([^"\';]*)\1', 
-                                response.headers['content-disposition'])
-                if match:
-                    return unquote(match.group(2))
-            
-            filename = url.split('/')[-1].split('?')[0]
-            return unquote(filename) if filename else 'file'
-        except:
-            return 'file'
-    
-    def get_file_size(self, url: str) -> Optional[int]:
-        """Get file size from URL headers"""
-        try:
-            response = self.session.head(url, allow_redirects=True, timeout=10, verify=False)
-            
-            if 'content-length' in response.headers:
-                return int(response.headers['content-length'])
-            
-            return None
-        except Exception as e:
-            logger.error(f"Error getting file size: {e}")
-            return None
+            logger.error(f"Error following redirect: {e}")
+            return url
     
     def format_file_size(self, size_bytes: int) -> str:
-        """Convert bytes to human readable format"""
+        """Convert bytes to human readable"""
         if not size_bytes:
             return "Unknown"
         
@@ -112,88 +155,66 @@ class TeraboxAdvancedExtractor:
             size_bytes /= 1024.0
         return f"{size_bytes:.2f} PB"
     
-    def get_thumbnail(self, download_link: str, filename: str) -> Optional[str]:
-        """Try to generate thumbnail URL"""
+    def extract_real_links(self, url: str) -> Dict:
+        """Extract REAL downloadable links from terabox"""
         try:
-            if not download_link:
-                return None
+            # Parse URL
+            parsed = self.parse_share_url(url)
+            service = parsed['service']
+            share_id = parsed['share_id']
             
-            # Some terabox services support thumbnail generation
-            # This is a basic attempt
-            if 'data.1024tera.com' in download_link or 'data.terabox.com' in download_link:
-                base = download_link.split('?')[0]
-                params = download_link.split('?')[1] if '?' in download_link else ''
-                
-                if params:
-                    return f"{base.replace('/file/', '/thumbnail/')}?{params}&quality=100"
+            logger.info(f"Extracting from: {service} - {share_id}")
             
-            return None
-        except:
-            return None
-    
-    def create_proxy_url(self, download_link: str, filename: str) -> str:
-        """Create proxy URL for safe downloading"""
-        try:
-            if not download_link:
-                return ""
+            # Method 1: Try API first
+            dlink = self.get_dlink_from_api(service, share_id)
             
-            # Using a proxy service for better compatibility
-            proxy_base = "https://api.allorigins.win/raw?url="
-            encoded_url = quote(download_link, safe='')
+            # Method 2: If API fails, try page content
+            if not dlink:
+                page_content = self.get_share_page(url)
+                if page_content:
+                    file_info = self.extract_file_info_from_page(page_content)
+                    if file_info and 'dlink' in file_info:
+                        dlink = file_info['dlink']
             
-            return f"{proxy_base}{encoded_url}"
-        except:
-            return download_link
-    
-    def create_stream_url(self, download_link: str, filename: str) -> str:
-        """Create streaming URL"""
-        try:
-            if not download_link:
-                return ""
+            # Method 3: Try to follow share link directly
+            if not dlink:
+                dlink = self.follow_redirect(url)
             
-            # For streaming, we can use the direct link with range headers support
-            return download_link
-        except:
-            return download_link
-    
-    def extract_complete_info(self, url: str) -> Dict:
-        """Extract all information from terabox URL"""
-        try:
-            parsed = self.parse_url(url)
+            if not dlink or dlink == url:
+                raise ValueError("Could not extract actual download link")
             
-            # Get direct download link
-            download_link = self.get_direct_link(url)
-            
-            if not download_link:
-                raise ValueError("Could not extract download link")
+            # Verify it's a real download link (should contain /file/)
+            if '/file/' not in dlink and 'data.' not in dlink:
+                raise ValueError("Extracted link doesn't look like actual file link")
             
             # Extract filename
-            filename = self.extract_filename(download_link)
+            filename_match = re.search(r'[?&]fn=([^&]+)', dlink)
+            filename = unquote(filename_match.group(1)) if filename_match else 'file'
             
             # Get file size
-            file_size_bytes = self.get_file_size(download_link)
-            file_size_formatted = self.format_file_size(file_size_bytes) if file_size_bytes else "Unknown"
-            
-            # Generate URLs
-            thumbnail = self.get_thumbnail(download_link, filename)
-            proxy_url = self.create_proxy_url(download_link, filename)
-            streaming_url = self.create_stream_url(download_link, filename)
+            try:
+                size_response = self.session.head(dlink, timeout=10, verify=False)
+                size_bytes = int(size_response.headers.get('content-length', 0))
+            except:
+                size_bytes = 0
             
             return {
                 'status': '✅ Successfully',
                 'file_name': filename,
-                'file_size': file_size_formatted,
-                'size_bytes': file_size_bytes or 0,
-                'download_link': download_link,
-                'thumbnail': thumbnail,
-                'proxy_url': proxy_url,
-                'streaming_url': streaming_url,
-                'service': parsed['service'],
-                'share_id': parsed['share_id'],
+                'file_size': self.format_file_size(size_bytes),
+                'size_bytes': size_bytes,
+                'download_link': dlink,
+                'streaming_url': dlink,  # Same as download for direct playback
+                'thumbnail': None,
+                'proxy_url': dlink,
+                'service': service,
+                'share_id': share_id,
                 'original_url': url,
-                'developer': 'Advanced Terabox API',
+                'developer': 'Terabox Real Download API'
             }
+        
         except Exception as e:
+            logger.error(f"Extraction failed: {e}")
             return {
                 'status': '❌ Failed',
                 'error': str(e),
@@ -201,14 +222,14 @@ class TeraboxAdvancedExtractor:
                 'file_size': None,
                 'size_bytes': 0,
                 'download_link': None,
+                'streaming_url': None,
                 'thumbnail': None,
                 'proxy_url': None,
-                'streaming_url': None,
-                'developer': 'Advanced Terabox API',
+                'developer': 'Terabox Real Download API'
             }
 
 # Initialize
-extractor = TeraboxAdvancedExtractor()
+extractor = TeraboxRealExtractor()
 
 # ==================== ENDPOINTS ====================
 
@@ -216,45 +237,30 @@ extractor = TeraboxAdvancedExtractor()
 async def root():
     """API Home"""
     return {
-        "name": "Advanced Terabox API",
-        "version": "2.0",
-        "description": "Extract complete file information from terabox links",
-        "usage": "GET /api?url=YOUR_TERABOX_URL",
+        "name": "Terabox Real Download API",
+        "version": "3.0",
+        "description": "Extract REAL downloadable file links from terabox shares",
+        "usage": "GET /api?url=YOUR_TERABOX_SHARE_URL",
         "example": "/api?url=https://1024terabox.com/s/10LHRppa8fMO6NJhuiRMkWA",
         "response_includes": [
             "file_name",
             "file_size",
-            "size_bytes",
-            "download_link",
-            "thumbnail",
-            "proxy_url",
+            "download_link (REAL direct link)",
             "streaming_url",
             "status"
         ],
-        "endpoints": {
-            "/": "This page",
-            "/api?url=...": "Extract complete file info",
-            "/download?url=...": "Download file",
-            "/stream?url=...": "Stream file",
-            "/docs": "Interactive API documentation",
-            "/info": "API information"
-        }
     }
 
 @app.get("/api")
-async def extract_complete_info(url: str = Query(..., description="Terabox URL")):
+async def get_download_links(url: str = Query(..., description="Terabox share URL")):
     """
-    Extract complete file information from terabox URL
+    Extract REAL downloadable file links from terabox
     
     Returns:
+    - download_link: ACTUAL file download link (not terabox page link!)
+    - streaming_url: Direct streaming link
     - file_name: Original filename
-    - file_size: Human readable file size (e.g., "26.89 MB")
-    - size_bytes: File size in bytes
-    - download_link: Direct download URL
-    - thumbnail: Thumbnail image URL
-    - proxy_url: Proxy download URL (for compatibility)
-    - streaming_url: Streaming URL (for video/audio)
-    - status: Operation status
+    - file_size: File size in human-readable format
     
     Example:
     /api?url=https://1024terabox.com/s/10LHRppa8fMO6NJhuiRMkWA
@@ -263,13 +269,13 @@ async def extract_complete_info(url: str = Query(..., description="Terabox URL")
         if not url:
             raise HTTPException(status_code=400, detail="URL parameter required")
         
-        if 'terabox' not in url.lower() and 'tera' not in url.lower():
-            raise HTTPException(status_code=400, detail="URL must be a terabox link")
+        if 'terabox' not in url.lower():
+            raise HTTPException(status_code=400, detail="Must be a terabox URL")
         
-        result = extractor.extract_complete_info(url)
+        result = extractor.extract_real_links(url)
         
-        if result.get('status') == '❌ Failed':
-            raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))
+        if result['status'] == '❌ Failed':
+            raise HTTPException(status_code=400, detail=result.get('error', 'Failed to extract links'))
         
         return result
     
@@ -279,38 +285,28 @@ async def extract_complete_info(url: str = Query(..., description="Terabox URL")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download")
-async def download_file(url: str = Query(..., description="Terabox URL")):
+async def download_redirect(url: str = Query(..., description="Terabox share URL")):
     """
-    Download file from terabox
-    
-    Browser will automatically download the file
+    Get download link and redirect to it
     """
     try:
-        if not url:
-            raise HTTPException(status_code=400, detail="URL parameter required")
+        result = extractor.extract_real_links(url)
         
-        result = extractor.extract_complete_info(url)
+        if result['status'] == '❌ Failed':
+            raise HTTPException(status_code=400, detail=result.get('error'))
         
-        if result.get('status') == '❌ Failed':
-            raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))
+        download_link = result.get('download_link')
         
-        download_url = result.get('download_link')
-        filename = result.get('file_name', 'file')
-        
-        if not download_url:
+        if not download_link:
             raise HTTPException(status_code=400, detail="Could not extract download link")
         
-        # Stream the file
-        response = extractor.session.get(download_url, stream=True, timeout=30, verify=False)
-        response.raise_for_status()
-        
-        return StreamingResponse(
-            response.iter_content(chunk_size=8192),
-            media_type=response.headers.get('content-type', 'application/octet-stream'),
-            headers={
-                'Content-Disposition': f'attachment; filename="{filename}"',
-            }
-        )
+        return {
+            'status': 'success',
+            'download_link': download_link,
+            'file_name': result.get('file_name'),
+            'file_size': result.get('file_size'),
+            'message': 'Use this link to download: ' + download_link
+        }
     
     except HTTPException as e:
         raise e
@@ -318,37 +314,27 @@ async def download_file(url: str = Query(..., description="Terabox URL")):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stream")
-async def stream_file(url: str = Query(..., description="Terabox URL")):
+async def stream_redirect(url: str = Query(..., description="Terabox share URL")):
     """
-    Stream file (for videos/audio)
-    
-    Supports range requests for seeking
+    Get stream link for video/audio
     """
     try:
-        if not url:
-            raise HTTPException(status_code=400, detail="URL parameter required")
+        result = extractor.extract_real_links(url)
         
-        result = extractor.extract_complete_info(url)
+        if result['status'] == '❌ Failed':
+            raise HTTPException(status_code=400, detail=result.get('error'))
         
-        if result.get('status') == '❌ Failed':
-            raise HTTPException(status_code=400, detail=result.get('error', 'Unknown error'))
+        stream_link = result.get('streaming_url')
         
-        stream_url = result.get('streaming_url')
-        
-        if not stream_url:
+        if not stream_link:
             raise HTTPException(status_code=400, detail="Could not extract stream link")
         
-        # Stream the file
-        response = extractor.session.get(stream_url, stream=True, timeout=30, verify=False)
-        response.raise_for_status()
-        
-        return StreamingResponse(
-            response.iter_content(chunk_size=8192),
-            media_type=response.headers.get('content-type', 'video/mp4'),
-            headers={
-                'Accept-Ranges': 'bytes',
-            }
-        )
+        return {
+            'status': 'success',
+            'stream_link': stream_link,
+            'file_name': result.get('file_name'),
+            'message': 'Use this link to stream: ' + stream_link
+        }
     
     except HTTPException as e:
         raise e
@@ -357,82 +343,39 @@ async def stream_file(url: str = Query(..., description="Terabox URL")):
 
 @app.get("/info")
 async def api_info():
-    """Get API information and capabilities"""
+    """Get API info"""
     return {
-        "name": "Advanced Terabox API",
-        "version": "2.0",
+        "name": "Terabox Real Download API",
+        "version": "3.0",
         "status": "🟢 Online",
-        "developer": "Advanced Terabox API",
-        "description": "Complete terabox file information extractor",
-        "endpoints": {
-            "GET /": "Home page",
-            "GET /api?url=...": "Extract complete file info",
-            "GET /download?url=...": "Download file",
-            "GET /stream?url=...": "Stream file",
-            "GET /info": "This page",
-            "GET /docs": "Interactive documentation"
-        },
-        "response_format": {
-            "status": "✅ Successfully / ❌ Failed",
-            "file_name": "string",
-            "file_size": "string (e.g., '26.89 MB')",
-            "size_bytes": "integer",
-            "download_link": "string (direct URL)",
-            "thumbnail": "string (image URL)",
-            "proxy_url": "string (proxy download URL)",
-            "streaming_url": "string (for video/audio)",
-            "service": "string",
-            "share_id": "string",
-            "original_url": "string",
-            "developer": "string"
-        },
-        "supported_services": [
-            "terabox.com",
-            "1024terabox.com",
-            "terasharefile.com",
-            "teraboxshare.com",
-            "And other terabox variants"
+        "description": "Extracts REAL downloadable links (not terabox share pages)",
+        "what_it_does": [
+            "Takes terabox share link as input",
+            "Extracts ACTUAL file download URL",
+            "Returns direct download/stream links",
+            "Works in browser directly"
         ],
-        "features": {
-            "file_info_extraction": True,
-            "direct_download": True,
-            "streaming": True,
-            "thumbnail_generation": True,
-            "proxy_urls": True,
-            "link_caching": True,
-            "concurrent_requests": "Unlimited"
+        "endpoints": {
+            "GET /api?url=...": "Get all links",
+            "GET /download?url=...": "Get download link",
+            "GET /stream?url=...": "Get stream link",
+            "GET /info": "This page"
         }
     }
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "status": "❌ Failed",
-            "error": exc.detail,
-            "example": "GET /api?url=https://1024terabox.com/s/10LHRppa8fMO6NJhuiRMkWA",
-            "developer": "Advanced Terabox API"
-        }
-    )
 
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "="*70)
-    print("🎬 ADVANCED TERABOX API v2.0")
+    print("🎬 TERABOX REAL DOWNLOAD API v3.0")
     print("="*70)
-    print("📡 API Running: http://localhost:3000")
-    print("📚 Documentation: http://localhost:3000/docs")
-    print("\n📝 Usage:")
-    print("  GET /api?url=TERABOX_LINK")
-    print("\n📋 Response Includes:")
-    print("  - file_name: Filename")
-    print("  - file_size: Human readable size (e.g., '26.89 MB')")
-    print("  - size_bytes: Size in bytes")
-    print("  - download_link: Direct download URL")
-    print("  - thumbnail: Thumbnail image URL")
-    print("  - proxy_url: Proxy download URL")
-    print("  - streaming_url: Stream URL for video/audio")
+    print("📡 API: http://localhost:3000")
+    print("📚 Docs: http://localhost:3000/docs")
+    print("\n🎯 What it does:")
+    print("  Input:  Terabox share link")
+    print("  Output: ACTUAL downloadable file link")
+    print("\n📝 Example:")
+    print("  GET /api?url=https://1024terabox.com/s/10LHRppa8fMO6NJhuiRMkWA")
+    print("  Returns: download_link (direct file URL)")
     print("="*70 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=3000)
-    
+                    
